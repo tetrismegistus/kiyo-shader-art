@@ -1,9 +1,28 @@
 #version 450
+#extension GL_EXT_shader_atomic_float : require  // Request atomic float operations
+#define hash_f_s(s)  ( float( hashi(uint(s)) ) / float( 0xffffffffU ) )
+#define hash_f()  ( float( seed = hashi(seed) ) / float( 0xffffffffU ) )
+#define hash_v2()  vec2(hash_f(),hash_f())
+#define hash_v3()  vec3(hash_f(),hash_f(),hash_f())
+#define hash_v4()  vec3(hash_f(),hash_f(),hash_f(),hash_f())
+#define rot(a) mat2(cos(a),-sin(a),sin(a),cos(a))
+#define PI 3.14159265359
+
+uint seed;
+uint hashi(uint x) {
+    x ^= x >> 16;
+    x *= 0x7feb352dU;
+    x ^= x >> 15;
+    x *= 0x846ca68bU;
+    x ^= x >> 16;
+    return x;
+}
 
 /*
  * Kiyo data
  * - WORKGROUP_SIZE and NUM_IMAGES are provided by the engine
  */
+
 
 layout ( local_size_x = WORKGROUP_SIZE, local_size_y = WORKGROUP_SIZE, local_size_z = 1 ) in;
 layout( binding = 0, rgba8 ) uniform image2D images[NUM_IMAGES];
@@ -18,23 +37,100 @@ layout( push_constant ) uniform PushConstants
  * User data
  */
 
-vec3 palette( in float t, in vec3 a, in vec3 b, in vec3 c, in vec3 d )
-{
-    return a + b*cos( 6.28318*(c*t+d) );
+
+float getTheta(vec2 v) {
+  return atan(v.x, v.y);
+}
+
+float getR(vec2 p) {
+  float xsq = p.x * p.x;
+  float ysq = p.y * p.y;
+  return sqrt(xsq + ysq);
+}
+
+/*
+ * variations
+ */
+
+
+vec2 sinusoidal(vec2 v, float amount) {
+  return vec2(amount * sin(v.x), amount * sin(v.y));
+}
+
+vec2 hyperbolic(vec2 v, float amount) {
+      float theta = getTheta(v);
+      float r = getR(v);
+      return vec2(sin(theta) / r, r * cos(theta)) * amount;
+ }
+
+ vec2 pdj(vec2 v, float amount) {
+    float PDJ_A_PARAMETER = 0.0;
+    float PDJ_B_PARAMETER = 0.0;
+    float PDJ_C_PARAMETER = 0.0;
+    float PDJ_D_PARAMETER = 0.0;
+    return vec2(sin(PDJ_A_PARAMETER * v.y) - cos(PDJ_B_PARAMETER * v.x),
+                   sin(PDJ_C_PARAMETER * v.x) - cos(PDJ_D_PARAMETER * v.y)
+                   ) * amount;
+  }
+
+vec2 julia(vec2 v, float JULIA_PARAMETER) {
+    float r = JULIA_PARAMETER * sqrt(sqrt(v.x * v.x + v.y * v.y));
+    float theta = getTheta(v);
+    return  vec2(cos(theta), sin(theta)) * r;
+}
+
+vec2 spiral(vec2 v, float amount) {
+      float theta = getTheta(v);
+      float r = getR(v);
+      float fract_r = 1.0/r;
+      float x = fract_r * cos(theta) + sin(r) * fract_r;
+      float y = fract_r * sin(theta) - cos(r) * fract_r;
+      return vec2(x * amount , y * amount );
+ }
+
+vec2 sech(vec2 v, float amount) {
+    float SECH_PARAMETER = 2.0;
+    float d = cos(2.0 * v.y) + cosh(2.0 * v.x);
+    if (d != 0) {
+        d = SECH_PARAMETER * 2.0 / d;
+    }
+    return vec2(d * cos(v.y) * cosh(v.x), -d * sin(v.y) * sinh(v.x));
+ }
+
+vec2 wrap(vec2 v) {
+    return sinusoidal(v,.4);
 }
 
 void main()
 {
-    ivec2 p = ivec2( gl_GlobalInvocationID.xy );
     ivec2 screenSize = imageSize( images[ constants.out_image ] );
+    ivec2 i_coords = ivec2( gl_GlobalInvocationID.xy );
+    int id = i_coords.x + i_coords.y * int(screenSize.x);
+    seed = id + 1235125u; // then hash_f() to get a random float
+    vec2 p = vec2(hash_f(), hash_f());
     if( p.x > screenSize.x || p.y > screenSize.y )
     {
         return;
     }
+    vec2 X = hash_v2() / min(screenSize.x, screenSize.y);
+    vec2 a = vec2(sin(X.x), cos(X.x)) * sqrt(X.y);
+    vec2 q = p + a * .15;
+    ivec2 p_screencoords = ivec2((q + .5) * ivec2(screenSize));
+    float r = hash_f();
+    if (
+        p_screencoords.x >= 0 && p_screencoords.x < int(screenSize.x) &&
+        p_screencoords.y >= 0 && p_screencoords.y < int(screenSize.y) &&
+        r > .3
+    ) {
+       vec3 col = vec3(0.0, 0.0, .5);
+        for (int i = 0; i < 12; i++) {
+            p /= dot(p * sin(constants.time * .1), cos(constants.time * .01) * p);
+            p *= spiral(julia(p, 1.0), 1.0);
+            p = wrap(p);
+        }
+        p += .5;
 
-    vec2 pos = vec2( float( p.x ) / float( screenSize.x ), float( p.y ) / float( screenSize.y ) ) - 0.5f;
-
-    float t = constants.time * .1f + 0.5f * length( pos );
-    vec3 color = palette( t, vec3( 0.5, 0.5, 0.5 ), vec3( 0.5, 0.5, 0.5 ), vec3( 2.0, 1.0, 0.0 ), vec3( 0.5, 0.20, 0.25 ) );
-    imageStore( images[ constants.out_image ], p, vec4( color, 1 ) );
+        imageStore( images[ constants.out_image ], ivec2(p * p_screencoords), vec4(col, 1));
+    }
 }
+
