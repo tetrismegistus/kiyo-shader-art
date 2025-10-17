@@ -26,6 +26,7 @@ uint hashi(uint x) {
 
 layout ( local_size_x = WORKGROUP_SIZE, local_size_y = WORKGROUP_SIZE, local_size_z = 1 ) in;
 layout( binding = 0, rgba8 ) uniform image2D images[NUM_IMAGES];
+layout( binding = 1, r32ui ) uniform uimage2D counterImages[3];
 layout( push_constant ) uniform PushConstants
 {
     float time;
@@ -36,6 +37,20 @@ layout( push_constant ) uniform PushConstants
 /*
  * User data
  */
+
+
+vec3 palette( in float t, in vec3 a, in vec3 b, in vec3 c, in vec3 d )
+{
+    return a + b*cos( 6.28318*(c*t+d) );
+}
+
+
+void writeColor(ivec3 color, ivec2 p)
+{
+    imageAtomicAdd(counterImages[0], p, color.r);
+    imageAtomicAdd(counterImages[1], p, color.g);
+    imageAtomicAdd(counterImages[2], p, color.b);
+}
 
 
 float getTheta(vec2 v) {
@@ -64,10 +79,10 @@ vec2 hyperbolic(vec2 v, float amount) {
  }
 
  vec2 pdj(vec2 v, float amount) {
-    float PDJ_A_PARAMETER = 0.0;
-    float PDJ_B_PARAMETER = 0.0;
-    float PDJ_C_PARAMETER = 0.0;
-    float PDJ_D_PARAMETER = 0.0;
+    float PDJ_A_PARAMETER = 1.0;
+    float PDJ_B_PARAMETER = 3.14;
+    float PDJ_C_PARAMETER = 0.2;
+    float PDJ_D_PARAMETER = 0.1;
     return vec2(sin(PDJ_A_PARAMETER * v.y) - cos(PDJ_B_PARAMETER * v.x),
                    sin(PDJ_C_PARAMETER * v.x) - cos(PDJ_D_PARAMETER * v.y)
                    ) * amount;
@@ -98,7 +113,7 @@ vec2 sech(vec2 v, float amount) {
  }
 
 vec2 wrap(vec2 v) {
-    return sinusoidal(v,.4);
+    return sinusoidal(v,.25);
 }
 
 void main()
@@ -123,14 +138,16 @@ void main()
         r > .3
     ) {
        vec3 col = vec3(0.0, 0.0, .5);
-        for (int i = 0; i < 12; i++) {
+        for (int i = 0; i < 1; i++) {
             p /= dot(p * sin(constants.time * .1), cos(constants.time * .01) * p);
-            p *= spiral(julia(p, 1.0), 1.0);
-            p = wrap(p);
+            p = pdj(julia(p, 1.0), 1.0);
+            vec2 newP = wrap(p);
+            p = newP;
+            writeColor(ivec3(col), ivec2(p * p_screencoords));
         }
-        p += .5;
+        p += .75;
 
-        imageStore( images[ constants.out_image ], ivec2(p * p_screencoords), vec4(col, 1));
+        // imageStore( images[ constants.out_image ], ivec2(p * p_screencoords), vec4(col, 1));
     }
 }
 
